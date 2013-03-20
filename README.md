@@ -8,3 +8,16 @@ Requirements:
 - PostgresSQL server
 
 This software is freeware.
+
+Version history
+===============
+
+Version 0.1 :
+- First release
+
+Version 0.2 :
+- Added exclusion time frames in order meta to be ignored at certain moments (example : last and first minutes of each hour)
+- Revamped active sampling debug message
+- Revamped sample name (added leading zeros to track ID)
+- Fixed the update condition in order to prevent duplicates when restarting the script after a short stop
+- Fixed the regular expression used to split metas in order not to match quotes within StreamTitle (example "let's go")

@@ -25,6 +25,8 @@ class MP3Stream {
     private $strRegExpArtist = null;
     private $strRegExpTitle = null;
     private $intSaveDuration = 30; // seconds
+    private $arrExclusionTimeFrames = array();
+    private $intStartDelay = 0;
 
     // Internal ressources
     private $objPDO = null;
@@ -44,6 +46,7 @@ class MP3Stream {
     private $intFrameCount = 0;
     private $intFramesToSave = 0;
     private $arrMetaInit = array();
+    private $intStartTime = 0;
     private $strRawStream = '';
     private $strAudioStream = '';
     private $strAudioFrame = '';
@@ -407,7 +410,7 @@ class MP3Stream {
 
     private function initMeta() {
         if (is_resource($this->resStream)) {
-            $intLines = 8;
+            $this->intStartTime = time();
             $strLine = fgets($this->resStream);
 
             $this->arrMetaInit = array();
@@ -438,6 +441,22 @@ class MP3Stream {
         }
     }
 
+    private function isInExclusionTimeFrame() {
+        $isInExclusionTimeFrame = false;
+        foreach ($this->arrExclusionTimeFrames as $arrExclusionTimeFrame) {
+
+            if (!is_null($arrExclusionTimeFrame[0]) && !is_null($arrExclusionTimeFrame[1])) {
+                $isInExclusionTimeFrame = ((intval(date('i')) >=  $arrExclusionTimeFrame[0]) && (intval(date('i')) <  $arrExclusionTimeFrame[1]));
+            } elseif (is_null($arrExclusionTimeFrame[0])) {
+                $isInExclusionTimeFrame = (intval(date('i')) <  $arrExclusionTimeFrame[1]);
+            } elseif (is_null($arrExclusionTimeFrame[1])) {
+                $isInExclusionTimeFrame = (intval(date('i')) >=  $arrExclusionTimeFrame[0]);
+            }
+        }
+
+        return $isInExclusionTimeFrame;
+    }
+
     private function filterMeta() {
         if (array_key_exists('metaint', $this->arrMetaInit)) {
             if ($this->intBytesRead < $this->arrMetaInit['metaint']) {
@@ -464,10 +483,10 @@ class MP3Stream {
                     $this->intBytesRead = $this->intBytesRead - $this->arrMetaInit['metaint'] - $intMetaLength -1 ;
 
                     if (($intMetaLength) > 0) {
-                        if (preg_match_all("/((\w+?)='(.*?)'){1,}/", $strMeta, $arrMatches)) {
+                        if (preg_match_all("/(\w+)='(.*?)';/", $strMeta, $arrMatches)) {
                             $this->arrMetaLive = array();
-                            foreach ($arrMatches[2] as $intKey => $strKey) {
-                                $this->arrMetaLive[$strKey] = utf8_encode($arrMatches[3][$intKey]);
+                            foreach ($arrMatches[1] as $intKey => $strKey) {
+                                $this->arrMetaLive[$strKey] = utf8_encode($arrMatches[2][$intKey]);
                             }
                         }
                     }
@@ -509,63 +528,67 @@ class MP3Stream {
     }
 
     private function processSQL() {
-        if ($this->objPDO instanceof \PDO) {
-
-            $objStmt = $this->objPDO->prepare("
-                SELECT  trac.trac_id,
-                        trac.trac_last_play
-                FROM    {$this->strSQLSchema}.track trac
-                WHERE   trac.trac_artist = ?
-                AND     trac.trac_title = ?
-            ");
-
-            $objStmt->execute(array(
-                $this->strLiveArtist,
-                $this->strLiveTitle,
-            ));
-
-            if (($arrData = $objStmt->fetch(\PDO::FETCH_ASSOC)) !== FALSE) {
-                // UPDATE
-
-                if (strtotime($arrData['trac_last_play']) < time() - 3600) {
-                
-                    $objStmt = $this->objPDO->prepare("
-                        UPDATE  {$this->strSQLSchema}.track
-                        SET     trac_last_play = now(),
-                                trac_play_count = trac_play_count +1
-                        WHERE   trac_id = ?
-                    ");
-
-                    $objStmt->execute(array($arrData['trac_id']));
-                }
-            } else {
-                // INSERT and save sample
+        if (!$this->isInExclusionTimeFrame() && (($this->intStartTime + $this->intStartDelay) < time())) {
+            if ($this->objPDO instanceof \PDO) {
 
                 $objStmt = $this->objPDO->prepare("
-                    INSERT  INTO {$this->strSQLSchema}.track (
-                        trac_artist,
-                        trac_title,
-                        trac_first_play,
-                        trac_last_play,
-                        trac_play_count
-                    )   VALUES (
-                        ?,
-                        ?,
-                        now(),
-                        now(),
-                        1
-                    )
+                    SELECT  trac.trac_id,
+                            trac.trac_last_play
+                    FROM    {$this->strSQLSchema}.track trac
+                    WHERE   trac.trac_artist = ?
+                    AND     trac.trac_title = ?
                 ");
 
-               $objStmt->execute(array(
+                $objStmt->execute(array(
                     $this->strLiveArtist,
                     $this->strLiveTitle,
-               ));
+                ));
 
-               $this->intLiveTrackID = $this->objPDO->lastInsertId('track_trac_id_seq');
+                if (($arrData = $objStmt->fetch(\PDO::FETCH_ASSOC)) !== FALSE) {
+                    // UPDATE
 
-               $this->initSampling();
+                    if (strtotime($arrData['trac_last_play']) < (time() - 3600)) {
+
+                        $objStmt = $this->objPDO->prepare("
+                            UPDATE  {$this->strSQLSchema}.track
+                            SET     trac_last_play = now(),
+                                    trac_play_count = trac_play_count + 1
+                            WHERE   trac_id = ?
+                        ");
+
+                        $objStmt->execute(array($arrData['trac_id']));
+                    }
+                } else {
+                    // INSERT and save sample
+
+                    $objStmt = $this->objPDO->prepare("
+                        INSERT  INTO {$this->strSQLSchema}.track (
+                            trac_artist,
+                            trac_title,
+                            trac_first_play,
+                            trac_last_play,
+                            trac_play_count
+                        )   VALUES (
+                            ?,
+                            ?,
+                            now(),
+                            now(),
+                            1
+                        )
+                    ");
+
+                   $objStmt->execute(array(
+                        $this->strLiveArtist,
+                        $this->strLiveTitle,
+                   ));
+
+                   $this->intLiveTrackID = $this->objPDO->lastInsertId('track_trac_id_seq');
+
+                   $this->initSampling();
+                }
             }
+        } else {
+            $this->debug("Meta ignored: start delay not expired or in exclusion time frame\n");
         }
     }
 
@@ -583,15 +606,13 @@ class MP3Stream {
                 }
             }
 
-            $strFileName = basename("{$this->intLiveTrackID} - {$this->strLiveArtist} - {$this->strLiveTitle}");
+            $strFileName = sprintf("%08d - %s - %s.mp3", $this->intLiveTrackID, basename($this->strLiveArtist), basename($this->strLiveTitle));
 
-            if (($this->resSample = @fopen("{$strDirectory}/{$strFileName}.mp3", 'w')) !== FALSE) {
+            if (($this->resSample = @fopen("{$strDirectory}/{$strFileName}", 'w')) !== FALSE) {
                 $arrHeaderInfo = $this->decodeMP3Header($this->strAudioFrame);
-
-
                 $this->intFramesToSave = $arrHeaderInfo['frequency'] * $this->intSaveDuration / $arrHeaderInfo['samples'];
 
-                $this->debug("Sampling started to [{$strDirectory}/{$strFileName}.mp3]\n");
+                $this->debug("Sampling started to [{$strDirectory}/{$strFileName}]\n");
             }
         }
     }
@@ -601,12 +622,12 @@ class MP3Stream {
             fwrite($this->resSample, $this->strAudioFrame);
             $this->intFramesToSave--;
 
-            $this->debug("Sampling running. Frame# " . $this->intFrameCount . ". Remaining: " . floor($this->intFramesToSave) . "  \r");
+            $this->debug("#{$this->intFrameCount}/" . floor($this->intFramesToSave) . "  \r");
 
             if ($this->intFramesToSave <= 0) {
                 fclose($this->resSample);
                 $this->resSample = null;
-                $this->debug("Sampling completed                                                                                    \n");
+                $this->debug("Sampling completed                          \n");
             }
         }
     }
@@ -779,6 +800,24 @@ class MP3Stream {
     public function setSaveDuration($intSaveDuration) {
         if (is_numeric($intSaveDuration)) {
             $this->intSaveDuration = $intSaveDuration;
+        } else {
+            throw new MP3StreamException('Integer expected');
+        }
+    }
+
+    public function addExclusionTimeFrame($intStart = null, $intEnd = null) {
+        if (
+            ((is_numeric($intStart) && ($intStart >= 0) && ($intStart <= 60)) || is_null($intStart))
+        &&  ((is_numeric($intEnd) && ($intEnd >= 0) && ($intEnd <= 60)) || is_null($intEnd))
+        &&  (!is_null($intStart) || !is_null($intEnd))
+        ) {
+            array_push($this->arrExclusionTimeFrames, array($intStart, $intEnd));
+        }
+    }
+
+    public function setStartDelay($intStartDelay) {
+        if (is_numeric($intStartDelay)) {
+            $this->intStartDelay = $intStartDelay;
         } else {
             throw new MP3StreamException('Integer expected');
         }
