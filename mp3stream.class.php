@@ -27,6 +27,7 @@ class MP3Stream {
     private $intSaveDuration = 30; // seconds
     private $arrExclusionTimeFrames = array();
     private $intStartDelay = 0;
+    private $isFirstMetaSkipped = false;
 
     // Internal ressources
     private $objPDO = null;
@@ -50,6 +51,7 @@ class MP3Stream {
     private $strRawStream = '';
     private $strAudioStream = '';
     private $strAudioFrame = '';
+    private $intTick = 0;
 
     private $arrRates = array(
         '1' =>  array(
@@ -415,9 +417,16 @@ class MP3Stream {
 
             $this->arrMetaInit = array();
 
-            while ((substr($strLine, 0, 10) == 'ICY 200 OK')
+            while ((substr($strLine, 0, 15) ==  'HTTP/1.0 200 OK')
+            ||    (substr($strLine, 0, 10) == 'ICY 200 OK')
+            ||    (substr($strLine, 0, 7) == 'Server:')
             ||    (substr($strLine, 0, 4) == 'icy-')
-            ||    (substr($strLine, 0, 12) == 'content-type')) {
+            ||    (substr($strLine, 0, 4) == 'ice-')
+            ||    (substr($strLine, 0, 13) == 'Cache-Control')
+            ||    (substr($strLine, 0, 7) == 'Expires')
+            ||    (substr($strLine, 0, 6) == 'Pragma')
+            ||    (substr($strLine, 0, 12) == 'content-type')
+            ||    (substr($strLine, 0, 12) == 'Content-Type')) {
 
                 if (substr($strLine, 0, 4) == 'icy-') {
                     if (preg_match('/(\w+?):(.*)/', $strLine, $arrMatches)) {
@@ -483,7 +492,7 @@ class MP3Stream {
                     $this->intBytesRead = $this->intBytesRead - $this->arrMetaInit['metaint'] - $intMetaLength -1 ;
 
                     if (($intMetaLength) > 0) {
-                        if (preg_match_all("/(\w+)='(.*?)';/", $strMeta, $arrMatches)) {
+                        if (preg_match_all('/(\w+)=\'(.*?)\';/', $strMeta, $arrMatches)) {
                             $this->arrMetaLive = array();
                             foreach ($arrMatches[1] as $intKey => $strKey) {
                                 $this->arrMetaLive[$strKey] = utf8_encode($arrMatches[2][$intKey]);
@@ -528,8 +537,8 @@ class MP3Stream {
     }
 
     private function processSQL() {
-        if (!$this->isInExclusionTimeFrame() && (($this->intStartTime + $this->intStartDelay) < time())) {
-            if ($this->objPDO instanceof \PDO) {
+        if (!$this->isInExclusionTimeFrame() && (($this->intStartTime + $this->intStartDelay) < time()) && !$this->isFirstMetaSkipped) {
+            if (($this->objPDO instanceof \PDO) && ($this->strLiveArtist != '') && ($this->strLiveTitle != '')) {
 
                 $objStmt = $this->objPDO->prepare("
                     SELECT  trac.trac_id,
@@ -588,7 +597,8 @@ class MP3Stream {
                 }
             }
         } else {
-            $this->debug("Meta ignored: start delay not expired or in exclusion time frame\n");
+            $this->debug("Meta ignored: first meta skipping activated, start delay not expired or in exclusion time frame\n");
+            $this->isFirstMetaSkipped = false;
         }
     }
 
@@ -601,7 +611,7 @@ class MP3Stream {
             $strDirectory = $this->strDirectory . '/' .date('Y-W');
 
             if (!is_dir($strDirectory)) {
-                if (@mkdir($strDirectory, 0777, true)) {
+                if (! @mkdir($strDirectory, 0777, true)) {
                     throw new MP3StreamException('Unable to create sample directory');
                 }
             }
@@ -693,7 +703,10 @@ class MP3Stream {
 
     private function processAudio() {
         while ($this->extractNextFrame()) {
-            $this->debug("#{$this->intFrameCount}      \r");
+            if ($this->intTick != time()) {
+                $this->debug("#{$this->intFrameCount}      \r");
+                $this->intTick = time();
+            }
             $this->processSampling();
             echo $this->strAudioFrame;
         }
@@ -722,6 +735,14 @@ class MP3Stream {
             $this->intStreamPort = $intStreamPort;
         } else {
             throw new MP3StreamException('Integer expected');
+        }
+    }
+
+    public function setStreamPath($strStreamPath) {
+        if (is_string($strStreamPath)) {
+            $this->strStreamPath = $strStreamPath;
+        } else {
+            throw new MP3StreamException('String expected');
         }
     }
 
@@ -821,6 +842,10 @@ class MP3Stream {
         } else {
             throw new MP3StreamException('Integer expected');
         }
+    }
+
+    public function setFirstFrameSkip($isFirstFrameSkipped) {
+        $this->isFirstMetaSkipped= ($isFirstFrameSkipped == true);
     }
 
     public function run() {
