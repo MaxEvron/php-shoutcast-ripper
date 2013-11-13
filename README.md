@@ -21,3 +21,8 @@ Version 0.2 :
 - Revamped sample name (added leading zeros to track ID)
 - Fixed the update condition in order to prevent duplicates when restarting the script after a short stop
 - Fixed the regular expression used to split metas in order not to match quotes within StreamTitle (example "let's go")
+
+Version 0.3
+- Fixed missing headers sent from IceCast 2 servers
+- Added full playlist support
+- Added DB Schema in comments
