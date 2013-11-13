@@ -18,7 +18,8 @@
     (
         play_id INT DEFAULT nextval('playlist_play_id_seq'::regclass) NOT NULL,
         trac_id INT NOT NULL,
-        play_time TIMESTAMP NOT NULL,
+        play_starttime TIMESTAMP NOT NULL,
+        play_endtime TIMESTAMP NULL,
         FOREIGN KEY ( trac_id ) REFERENCES track ( trac_id ) ON UPDATE CASCADE
     );
 
@@ -638,65 +639,22 @@
         private function processSQL()
         {
             if (! $this->isInExclusionTimeFrame() && (($this->intStartTime + $this->intStartDelay) < time()) && ! $this->isFirstMetaSkipped) {
-                if (($this->objPDO instanceof \PDO) && ($this->strLiveArtist != '') && ($this->strLiveTitle != '')) {
+                if ($this->objPDO instanceof \PDO) {
 
-                    $objStmt = $this->objPDO->prepare("
-                        SELECT  trac.trac_id,
-                                trac.trac_last_play
-                        FROM    {$this->strSQLSchema}.track trac
-                        WHERE   trac.trac_artist = ?
-                        AND     trac.trac_title = ?
-                    ");
+                    $this->objPDO->exec("
+                        UPDATE  playlist
+                        SET     play_endtime = now()
+                        WHERE   play_id = (SELECT max(play_id) FROM playlist)
+                        AND     play_endtime IS NULL;");
 
-                    $objStmt->execute(array(
-                        $this->strLiveArtist,
-                        $this->strLiveTitle,
-                    ));
-
-                    if (($arrData = $objStmt->fetch(\PDO::FETCH_ASSOC)) !== FALSE) {
-                        // UPDATE
-
-                        if (strtotime($arrData['trac_last_play']) < (time() - 3600)) {
-
-                            $objStmt = $this->objPDO->prepare("
-                                UPDATE  {$this->strSQLSchema}.track
-                                SET     trac_last_play = now(),
-                                        trac_play_count = trac_play_count + 1
-                                WHERE   trac_id = ?
-                            ");
-
-                            $objStmt->execute(array($arrData['trac_id']));
-
-                            $objStmt = $this->objPDO->prepare("
-                                INSERT INTO {$this->strSQLSchema}.playlist (
-                                  trac_id,
-                                  play_time
-                                ) VALUES (
-                                  ?,
-                                  (SELECT trac_last_play FROM {$this->strSQLSchema}.track WHERE trac_id = ?)
-                                )
-                            ");
-
-                            $objStmt->execute(array($arrData['trac_id'], $arrData['trac_id']));
-
-                        }
-                    } else {
-                        // INSERT and save sample
+                    if (($this->strLiveArtist != '') && ($this->strLiveTitle != '')) {
 
                         $objStmt = $this->objPDO->prepare("
-                            INSERT  INTO {$this->strSQLSchema}.track (
-                                trac_artist,
-                                trac_title,
-                                trac_first_play,
-                                trac_last_play,
-                                trac_play_count
-                            )   VALUES (
-                                ?,
-                                ?,
-                                now(),
-                                now(),
-                                1
-                            )
+                            SELECT  trac.trac_id,
+                                    trac.trac_last_play
+                            FROM    {$this->strSQLSchema}.track trac
+                            WHERE   trac.trac_artist = ?
+                            AND     trac.trac_title = ?
                         ");
 
                         $objStmt->execute(array(
@@ -704,23 +662,75 @@
                             $this->strLiveTitle,
                         ));
 
-                        $this->intLiveTrackID = $this->objPDO->lastInsertId('track_trac_id_seq');
+                        if (($arrData = $objStmt->fetch(\PDO::FETCH_ASSOC)) !== FALSE) {
+                            // UPDATE
 
-                        $objStmt = $this->objPDO->prepare("
-                            INSERT INTO {$this->strSQLSchema}.playlist (
-                                trac_id,
-                                play_time
-                            )   VALUES (
-                                ?,
-                                (SELECT trac_last_play FROM {$this->strSQLSchema}.track WHERE trac_id = ?)
-                            )
-                        ");
+                            if (strtotime($arrData['trac_last_play']) < (time() - 3600)) {
 
-                        $objStmt->execute(array($this->intLiveTrackID, $this->intLiveTrackID));
+                                $objStmt = $this->objPDO->prepare("
+                                    UPDATE  {$this->strSQLSchema}.track
+                                    SET     trac_last_play = now(),
+                                            trac_play_count = trac_play_count + 1
+                                    WHERE   trac_id = ?
+                                ");
 
-                        $this->initSampling();
+                                $objStmt->execute(array($arrData['trac_id']));
+
+                                $objStmt = $this->objPDO->prepare("
+                                    INSERT INTO {$this->strSQLSchema}.playlist (
+                                      trac_id,
+                                      play_starttime
+                                    ) VALUES (
+                                      ?,
+                                      (SELECT trac_last_play FROM {$this->strSQLSchema}.track WHERE trac_id = ?)
+                                    )
+                                ");
+
+                                $objStmt->execute(array($arrData['trac_id'], $arrData['trac_id']));
+
+                            }
+                        } else {
+                            // INSERT and save sample
+
+                            $objStmt = $this->objPDO->prepare("
+                                INSERT  INTO {$this->strSQLSchema}.track (
+                                    trac_artist,
+                                    trac_title,
+                                    trac_first_play,
+                                    trac_last_play,
+                                    trac_play_count
+                                )   VALUES (
+                                    ?,
+                                    ?,
+                                    now(),
+                                    now(),
+                                    1
+                                )
+                            ");
+
+                            $objStmt->execute(array(
+                                $this->strLiveArtist,
+                                $this->strLiveTitle,
+                            ));
+
+                            $this->intLiveTrackID = $this->objPDO->lastInsertId('track_trac_id_seq');
+
+                            $objStmt = $this->objPDO->prepare("
+                                INSERT INTO {$this->strSQLSchema}.playlist (
+                                    trac_id,
+                                    play_starttime
+                                )   VALUES (
+                                    ?,
+                                    (SELECT trac_last_play FROM {$this->strSQLSchema}.track WHERE trac_id = ?)
+                                )
+                            ");
+
+                            $objStmt->execute(array($this->intLiveTrackID, $this->intLiveTrackID));
+
+                            $this->initSampling();
+                        }
+
                     }
-
                 }
             } else {
                 $this->debug("Meta ignored: first meta skipping activated, start delay not expired or in exclusion time frame\n");
